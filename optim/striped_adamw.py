@@ -228,30 +228,28 @@ def _multi_tensor_striped_adamw(
 
         step_size = _stack_if_compiling([(lr / bc) * -1 for bc in bias_correction1])
 
-        bias_correction2_sqrt = [_dispatch_sqrt(bc) for bc in bias_correction2]
+        correct_expavg_sqs = torch._foreach_div(device_exp_avg_sqs, bias_correction2)
 
-        exp_avg_sq_sqrt = torch._foreach_sqrt(device_exp_avg_sqs)
-
-        torch._foreach_div_(exp_avg_sq_sqrt, bias_correction2_sqrt)
-
-        approx_exp_avg_sq_sqrt = []
+        approx_sqrt_expavg_sqs = []
         shapes = [x.shape for x in device_exp_avgs]
-        for shape, p_tensor in zip(shapes, exp_avg_sq_sqrt):
+        for shape, p_expavg_sq in zip(shapes, correct_expavg_sqs):
             if len(shape) >= 2:
-                # Expand row/col averages into the full matrix of approximated sqrt avg second moments
-                p_rowcol = p_tensor
+                # For 2D+ parameters, approximate the full matrix of second moments using
+                # averages across rows and columns.
+                # p_rowcol = cat(rowavg(expavg(grads_sq)), colavg(expavg(grads_sq)))
+                p_rowcol = p_expavg_sq
                 assert len(p_rowcol.shape) == (len(shape) - 1)
-                assert p_rowcol.shape[-1] == (shape[-2]+shape[-1])
+                assert p_rowcol.shape[-1] == (shape[-2] + shape[-1])
                 p_row = p_rowcol[..., :shape[-2]][..., :, None]
                 p_col = p_rowcol[..., shape[-2]:][..., None, :]
-                p_mu = p_rowcol.mean(-1)[..., None,None]
-                approx_p_exp_avg_sq_sqrt = ((p_row + eps).log() + (p_col + eps).log() - (p_mu + eps).log()).exp()
-                assert approx_p_exp_avg_sq_sqrt.shape == shape
-                approx_exp_avg_sq_sqrt.append(approx_p_exp_avg_sq_sqrt)
+                p_mu = p_rowcol.mean(-1)[..., None, None]
+                p_approx_sqrt_expavg_sq = (0.5 * ((p_row + eps).log() + (p_col + eps).log() - (p_mu + eps).log())).exp()
+                assert p_approx_sqrt_expavg_sq.shape == shape
+                approx_sqrt_expavg_sqs.append(p_approx_sqrt_expavg_sq)
             else:
-                p_exp_avg_sq_sqrt = p_tensor
-                approx_exp_avg_sq_sqrt.append(p_exp_avg_sq_sqrt)
+                # For 1D parameters use the exact sqrt of second moments (the standard AdamW update).
+                approx_sqrt_expavg_sqs.append(p_expavg_sq.sqrt())
 
-        torch._foreach_add_(approx_exp_avg_sq_sqrt, eps)
-        torch._foreach_addcdiv_(device_params, device_exp_avgs, approx_exp_avg_sq_sqrt, step_size)
+        torch._foreach_add_(approx_sqrt_expavg_sqs, eps)
+        torch._foreach_addcdiv_(device_params, device_exp_avgs, approx_sqrt_expavg_sqs, step_size)
 
