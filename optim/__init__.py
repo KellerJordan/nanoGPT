@@ -1,1 +1,1 @@
-from .striped_adamw.py import StripedAdamW
+from .striped_adamw import StripedAdamW
