@@ -1,5 +1,135 @@
 
-# nanoGPT
+# StripedAdamW nanoGPT
+
+Using `torch.optim.AdamW`:
+
+```
+python train.py config/finetune_shakespeare.py
+```
+
+```
+Thu Dec  7 08:44:34 2023       
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 525.85.12    Driver Version: 525.85.12    CUDA Version: 12.0     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|                               |                      |               MIG M. |
+|===============================+======================+======================|
+|   0  NVIDIA A100-SXM...  On   | 00000000:06:00.0 Off |                    0 |
+| N/A   55C    P0   272W / 400W |  40311MiB / 40960MiB |    100%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+                                                                               
++-----------------------------------------------------------------------------+
+| Processes:                                                                  |
+|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
+|        ID   ID                                                   Usage      |
+|=============================================================================|
+|    0   N/A  N/A   2256259      C   python                          40308MiB |
++-----------------------------------------------------------------------------+
+```
+
+```
+step 0: train loss 3.9021, val loss 3.7297
+iter 0: loss 3.6887, time 92875.04ms, mfu -100.00%
+iter 1: loss 2.9238, time 4957.68ms, mfu -100.00%
+iter 2: loss 3.3671, time 4845.65ms, mfu -100.00%
+iter 3: loss 3.0699, time 4931.14ms, mfu -100.00%
+iter 4: loss 3.2182, time 4931.26ms, mfu -100.00%
+step 5: train loss 2.9744, val loss 2.8612
+saving checkpoint to out-shakespeare
+iter 5: loss 2.9829, time 31774.40ms, mfu 3.40%
+iter 6: loss 3.1890, time 4932.58ms, mfu 5.25%
+iter 7: loss 2.3899, time 4934.40ms, mfu 6.91%
+iter 8: loss 3.1239, time 4932.04ms, mfu 8.41%
+iter 9: loss 2.5013, time 4930.39ms, mfu 9.76%
+step 10: train loss 2.8836, val loss 2.8577
+saving checkpoint to out-shakespeare
+iter 10: loss 2.8726, time 32579.69ms, mfu 9.11%
+iter 11: loss 3.1160, time 4933.52ms, mfu 10.39%
+iter 12: loss 3.1866, time 4931.99ms, mfu 11.54%
+iter 13: loss 3.0586, time 4933.79ms, mfu 12.57%
+iter 14: loss 2.4402, time 4930.53ms, mfu 13.51%
+step 15: train loss 2.7423, val loss 2.8378
+saving checkpoint to out-shakespeare
+iter 15: loss 2.4325, time 32653.07ms, mfu 12.49%
+iter 16: loss 3.2267, time 4932.19ms, mfu 13.43%
+iter 17: loss 2.6418, time 4933.49ms, mfu 14.27%
+iter 18: loss 2.4396, time 4929.20ms, mfu 15.04%
+iter 19: loss 2.6478, time 4930.19ms, mfu 15.72%
+step 20: train loss 2.6565, val loss 2.8972
+iter 20: loss 3.2571, time 7569.99ms, mfu 15.58%
+```
+
+```
+N/A   59C    P0   341W / 400W |  40251MiB / 40960MiB |     98%
+```
+
+---
+
+Using `StripedAdamW`:
+
+```
+python train.py config/finetune_shakespeare.py
+```
+
+```
+Thu Dec  7 08:41:10 2023       
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 525.85.12    Driver Version: 525.85.12    CUDA Version: 12.0     |
+|-------------------------------+----------------------+----------------------+
+| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|                               |                      |               MIG M. |
+|===============================+======================+======================|
+|   0  NVIDIA A100-SXM...  On   | 00000000:06:00.0 Off |                    0 |
+| N/A   54C    P0   275W / 400W |  33107MiB / 40960MiB |    100%      Default |
+|                               |                      |             Disabled |
++-------------------------------+----------------------+----------------------+
+                                                                               
++-----------------------------------------------------------------------------+
+| Processes:                                                                  |
+|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |
+|        ID   ID                                                   Usage      |
+|=============================================================================|
+|    0   N/A  N/A   2256023      C   python                          33104MiB |
++-----------------------------------------------------------------------------+
+```
+
+```
+step 0: train loss 3.9020, val loss 3.7294
+iter 0: loss 3.6876, time 103955.40ms, mfu -100.00%
+iter 1: loss 2.9022, time 4903.76ms, mfu -100.00%
+iter 2: loss 3.3488, time 5759.75ms, mfu -100.00%
+iter 3: loss 3.0656, time 4932.02ms, mfu -100.00%
+iter 4: loss 3.2206, time 4930.26ms, mfu -100.00%
+step 5: train loss 2.9816, val loss 2.8612
+saving checkpoint to out-shakespeare
+iter 5: loss 2.9836, time 22037.02ms, mfu 4.90%
+iter 6: loss 3.1936, time 4932.57ms, mfu 6.60%
+iter 7: loss 2.3927, time 4933.77ms, mfu 8.13%
+iter 8: loss 3.1522, time 4931.91ms, mfu 9.50%
+iter 9: loss 2.5068, time 4932.85ms, mfu 10.74%
+step 10: train loss 2.8979, val loss 2.8585
+saving checkpoint to out-shakespeare
+iter 10: loss 2.8762, time 24863.39ms, mfu 10.10%
+iter 11: loss 3.1316, time 4933.44ms, mfu 11.28%
+iter 12: loss 3.1924, time 4931.34ms, mfu 12.34%
+iter 13: loss 3.0880, time 4931.89ms, mfu 13.30%
+iter 14: loss 2.4793, time 4929.34ms, mfu 14.16%
+step 15: train loss 2.7672, val loss 2.8411
+saving checkpoint to out-shakespeare
+iter 15: loss 2.4407, time 24946.24ms, mfu 13.17%
+iter 16: loss 3.2406, time 4931.52ms, mfu 14.05%
+iter 17: loss 2.6732, time 4932.95ms, mfu 14.83%
+iter 18: loss 2.4818, time 4931.11ms, mfu 15.54%
+iter 19: loss 2.6766, time 4932.91ms, mfu 16.17%
+step 20: train loss 2.6835, val loss 2.9004
+iter 20: loss 3.2811, time 7566.10ms, mfu 15.98%
+```
+
+---
 
 ![nanoGPT](assets/nanogpt.jpg)
 
