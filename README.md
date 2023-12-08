@@ -1,7 +1,7 @@
 
 # StripedAdamW nanoGPT
 
-Note: this is apparently sort of the same as AdaFactor. TBD if there's any difference.
+nvm apparently this is literally just adafactor
 
 Using `torch.optim.AdamW`:
 
