@@ -1,9 +1,8 @@
 import torch
 from torch import Tensor
-from torch.optim.optimizer import (Optimizer, _get_value, _dispatch_sqrt,
-                                   _default_to_fused_or_foreach, _stack_if_compiling)
+from torch.optim.optimizer import (Optimizer, _use_grad_for_differentiable, _get_value,
+                        _stack_if_compiling, _default_to_fused_or_foreach, params_t)
 from typing import List, Optional, Tuple, Union
-from torch.utils._foreach_utils import _group_tensors_by_device_and_dtype
 
 __all__ = ["StripedAdamW", "striped_adamw"]
 
@@ -11,14 +10,20 @@ __all__ = ["StripedAdamW", "striped_adamw"]
 class StripedAdamW(Optimizer):
     def __init__(
         self,
-        params,
+        params: params_t,
         lr: Union[float, Tensor] = 1e-3,
         betas: Tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
         weight_decay: float = 1e-2,
+        *,
+        maximize: bool = False,
+        foreach: Optional[bool] = None,
+        differentiable: bool = False,
     ):
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
+        if isinstance(lr, Tensor) and foreach:
+            raise ValueError("lr as a Tensor is not supported for foreach=True")
         if not 0.0 <= eps:
             raise ValueError(f"Invalid epsilon value: {eps}")
         if not 0.0 <= betas[0] < 1.0:
@@ -32,11 +37,18 @@ class StripedAdamW(Optimizer):
             betas=betas,
             eps=eps,
             weight_decay=weight_decay,
+            foreach=foreach,
+            maximize=maximize,
+            differentiable=differentiable,
         )
         super().__init__(params, defaults)
 
     def __setstate__(self, state):
         super().__setstate__(state)
+        for group in self.param_groups:
+            group.setdefault("maximize", False)
+            group.setdefault("foreach", None)
+            group.setdefault("differentiable", False)
         state_values = list(self.state.values())
         step_is_tensor = (len(state_values) != 0) and torch.is_tensor(
             state_values[0]["step"]
@@ -66,6 +78,8 @@ class StripedAdamW(Optimizer):
 
             # State initialization
             if len(state) == 0:
+                # note(crcrpar): Deliberately host `step` on CPU if fused is off.
+                # This is because kernel launches are costly on CUDA and XLA.
                 state["step"] = (
                     torch.tensor(0.0)
                 )
@@ -84,15 +98,29 @@ class StripedAdamW(Optimizer):
             exp_avgs.append(state["exp_avg"])
             exp_avg_sqs.append(state["exp_avg_sq"])
 
+            if group['differentiable'] and state['step'].requires_grad:
+                raise RuntimeError('`requires_grad` is not supported for `step` in differentiable mode')
+
+            # Foreach does not support a tensor lr
+            if group['foreach'] and isinstance(group['lr'], Tensor):
+                raise RuntimeError('lr as a Tensor is not supported for foreach=True')
+
             state_steps.append(state["step"])
 
+    @_use_grad_for_differentiable
+    def step(self, closure=None):
+        """Performs a single optimization step.
 
-    def step(self):
-        """Performs a single optimization step."""
-
+        Args:
+            closure (Callable, optional): A closure that reevaluates the model
+                and returns the loss.
+        """
         self._cuda_graph_capture_health_check()
 
         loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
 
         for group in self.param_groups:
             params_with_grad = []
@@ -122,6 +150,11 @@ class StripedAdamW(Optimizer):
                 lr=group["lr"],
                 weight_decay=group["weight_decay"],
                 eps=group["eps"],
+                maximize=group["maximize"],
+                foreach=group["foreach"],
+                differentiable=group["differentiable"],
+                grad_scale=getattr(self, "grad_scale", None),
+                found_inf=getattr(self, "found_inf", None),
             )
 
         return loss
@@ -134,27 +167,47 @@ def striped_adamw(
     state_steps: List[Tensor],
     # kwonly args with defaults are not supported by functions compiled with torchscript issue #70627
     # setting this as kwarg for now as functional API is compiled by torch/distributed/optim
+    foreach: Optional[bool] = None,
+    differentiable: bool = False,
+    grad_scale: Optional[Tensor] = None,
+    found_inf: Optional[Tensor] = None,
     *,
     beta1: float,
     beta2: float,
     lr: Union[float, Tensor],
     weight_decay: float,
     eps: float,
+    maximize: bool,
 ):
     r"""Functional API that performs AdamW algorithm computation.
 
     See :class:`~torch.optim.AdamW` for details.
     """
 
-    _, foreach = _default_to_fused_or_foreach(params, False, use_fused=False)
-    assert foreach, 'StripedAdam only supports multi-tensor optimization for now'
-
     if not torch._utils.is_compiling() and not all(isinstance(t, torch.Tensor) for t in state_steps):
         raise RuntimeError(
             "API has changed, `state_steps` argument must contain a list of singleton tensors"
         )
 
-    func = _multi_tensor_striped_adamw
+    # Respect when the user inputs False/True for foreach or fused. We only want to change
+    # the default when neither have been user-specified. Note that we default to foreach
+    # and pass False to use_fused. This is not a mistake--we want to give the fused impl
+    # bake-in time before making it the default, even if it is typically faster.
+    if foreach is None:
+        _, foreach = _default_to_fused_or_foreach(params, differentiable, use_fused=False)
+        # Do not flip on foreach for the unsupported case where lr is a Tensor.
+        if foreach and isinstance(lr, Tensor):
+            foreach = False
+    if foreach is None:
+        foreach = False
+
+    if foreach and torch.jit.is_scripting():
+        raise RuntimeError("torch.jit.script not supported with foreach optimizers")
+
+    if foreach and not torch.jit.is_scripting():
+        func = _multi_tensor_striped_adamw
+    else:
+        raise RuntimeError("single tensor StripedAdamW not currently supported")
 
     func(
         params,
@@ -167,6 +220,10 @@ def striped_adamw(
         lr=lr,
         weight_decay=weight_decay,
         eps=eps,
+        maximize=maximize,
+        differentiable=differentiable,
+        grad_scale=grad_scale,
+        found_inf=found_inf,
     )
 
 def _multi_tensor_striped_adamw(
@@ -175,28 +232,45 @@ def _multi_tensor_striped_adamw(
     exp_avgs: List[Tensor],
     exp_avg_sqs: List[Tensor],
     state_steps: List[Tensor],
+    grad_scale: Optional[Tensor],
+    found_inf: Optional[Tensor],
     *,
     beta1: float,
     beta2: float,
     lr: Union[Tensor, float],
     weight_decay: float,
     eps: float,
+    maximize: bool,
+    differentiable: bool,
 ):
     if len(params) == 0:
         return
 
     if isinstance(lr, Tensor):
-        raise RuntimeError("lr as a Tensor is not supported")
+        raise RuntimeError("lr as a Tensor is not supported for foreach=True")
 
-    grouped_tensors = _group_tensors_by_device_and_dtype([
+    assert not differentiable, "_foreach ops don't support autograd"
+
+    assert grad_scale is None and found_inf is None
+
+    grouped_tensors = Optimizer._group_tensors_by_device_and_dtype([
         params, grads, exp_avgs, exp_avg_sqs, state_steps])
-    for (
+    for ((
         device_params,
         device_grads,
         device_exp_avgs,
         device_exp_avg_sqs,
         device_state_steps,
-    ) in grouped_tensors.values():
+    ), _) in grouped_tensors.values():
+        if maximize:
+            device_grads = torch._foreach_neg(device_grads)
+
+        device_grads = [torch.view_as_real(x) if torch.is_complex(x) else x for x in device_grads]
+        device_exp_avgs = [torch.view_as_real(x) if torch.is_complex(x) else x for x in device_exp_avgs]
+        device_exp_avg_sqs = [
+            torch.view_as_real(x) if torch.is_complex(x) else x for x in device_exp_avg_sqs
+        ]
+        device_params = [torch.view_as_real(x) if torch.is_complex(x) else x for x in device_params]
 
         # update steps
         torch._foreach_add_(device_state_steps, 1)
@@ -217,8 +291,6 @@ def _multi_tensor_striped_adamw(
                 p_exp_avgs_sqs.lerp_(p_rowcol, 1 - beta2)
             else:
                 p_exp_avgs_sqs.lerp_(p_grads_sq, 1 - beta2)
-        #torch._foreach_mul_(device_exp_avg_sqs, beta2)
-        #torch._foreach_addcmul_(device_exp_avg_sqs, device_grads, device_grads, 1 - beta2)
 
         # Delete the local intermediate since it won't be used anymore to save on peak memory
         del device_grads
@@ -227,7 +299,7 @@ def _multi_tensor_striped_adamw(
         bias_correction2 = [1 - beta2 ** _get_value(step) for step in device_state_steps]
 
         step_size = _stack_if_compiling([(lr / bc) * -1 for bc in bias_correction1])
-
+        
         correct_expavg_sqs = torch._foreach_div(device_exp_avg_sqs, bias_correction2)
 
         approx_sqrt_expavg_sqs = []
